@@ -84,7 +84,7 @@ class LogFollower(Base):
 
     async def follower(self, identifier, f, qs):
         ino = os.stat(f.fileno()).st_ino
-        self.log.debug(f"Follower coro created for file {f.name} inode {ino}.")
+        self.log.info(f"Follower coro created for file {f.name} inode {ino}.")
         while True:
             try:
                 line = f.readline()
@@ -100,7 +100,7 @@ class LogFollower(Base):
                 self.log.warning(f"During the line decoding error occured. Continue to next line. Error '{e}'.")
                 continue
             except asyncio.exceptions.CancelledError:
-                self.log.debug(f"Follower coro cancelled for file {f.name} inode {ino}.")
+                self.log.info(f"Follower coro cancelled for file {f.name} inode {ino}.")
                 f.close()
                 return
 
@@ -114,46 +114,47 @@ class LogFollower(Base):
                 del self.filemeta[file]
             except (AttributeError, KeyError):
                 pass
-            self.log.debug(f"Filemeta items deleted for file: '{file}'.")
+            self.log.info(f"Filemeta items deleted for file: '{file}'.")
 
     async def watch_followers(self):
         try:
             await asyncio.sleep(1)
-            delay = 10
+            delay = 60
             self.log.info(f"File followers watcher job started. Recheck interval: '{delay}s'.")
             while True:
                 async with self.filemetalock:
-                    self.log.debug(f"Acquired filemeta lock. Inspecting files and followers.")
+                    self.log.info(f"Acquired filemeta lock. Inspecting files and followers.")
                     for file, meta in self.filemeta.items():
                         tries_limit = 2
-                        self.log.debug(f"Inspecting. Tries with failure: '{meta['tries']}'. File '{file}'.")
+                        self.log.info(f"Inspecting. Tries with failure: '{meta['tries']}'. File '{file}'.")
                         if meta["tries"] >= tries_limit:
-                            self.log.debug(f"File is absent. Scheduling for deletion from filemeta. File: '{file}'.")
+                            self.log.info(f"File is absent. Scheduling for deletion from filemeta. File: '{file}'.")
                             asyncio.create_task(self.prune_filemeta(file))
                             continue
                         try:
                             stat = os.stat(file)
+                            meta.setdefault("stat", stat)
                             if meta["f"] is None:
                                 meta["f"] = open(file,'r')
                                 meta["f"].seek(0, 2)
                                 meta["task"] = asyncio.create_task(self.follower(meta["identifier"], meta["f"], meta["qs"]))
-                                self.log.debug(f"File opened. Created file follower task.")
+                                self.log.info(f"File opened. Created file follower task.")
                             elif stat.st_ino != meta["stat"].st_ino:
                                 meta["task"].cancel()
                                 meta["f"] = open(file,'r')
                                 meta["task"] = asyncio.create_task(self.follower(meta["identifier"], meta["f"], meta["qs"]))
-                                self.log.debug(f"File inode changed. Recreated logfollower task.")
+                                self.log.info(f"File inode changed. Recreated logfollower task.")
                             elif stat.st_size < meta["stat"].st_size:
                                 meta["f"].seek(0)
-                                self.log.debug(f"File size reduced. Detected (copy)truncate. Seek to the beginning.")
+                                self.log.warning(f"File size reduced. Detected (copy)truncate. Seek to the beginning.")
                             meta["stat"] = stat
                             meta["tries"] = 0
                         except FileNotFoundError:
                             meta["tries"] += 1
-                            self.log.debug(f"File not found. Incremented failure tries count. Continue.")
+                            self.log.warning(f"File not found. Incremented failure tries count. Continue.")
                             continue
-                        self.log.debug(f"File check done.")
-                self.log.debug(f"Released filemeta lock. Inspecting files and followers done.")
+                        self.log.info(f"File check done.")
+                self.log.info(f"Released filemeta lock. Inspecting files and followers done.")
                 await asyncio.sleep(delay)
         except asyncio.exceptions.CancelledError:
             try:
